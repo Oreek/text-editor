@@ -25,6 +25,21 @@
 #define MEOW_QUIT_TIMES 2
 #define MEOW_UNDO_MAX 100
 
+/*** Colors For Theming ***/
+#define RP_BG "\x1b[48;2;25;23;36m"
+#define RP_SURF "\x1b[48;2;31;29;46m"
+#define RP_OVERLAY "\x1b[48;2;38;35;58m"
+#define RP_FG "\x1b[38;2;224;222;244m"
+#define RP_MUTED "\x1b[38;2;110;106;134m"
+#define RP_KW1 "\x1b[38;2;49;116;143m"
+#define RP_KW2 "\x1b[38;2;235;111;146m"
+#define RP_STR "\x1b[38;2;235;188;186m"
+#define RP_NUM "\x1b[38;2;246;193;119m"
+#define RP_MATCH "\x1b[38;2;156;207;216m"
+#define RP_STATUS "\x1b[48;2;38;35;58m"
+#define RP_MSG "\x1b[48;2;31;29;46m"
+#define RP_RESET "\x1b[0m"
+
 enum editorKey
 {
   BACKSPACE = 127,
@@ -144,6 +159,7 @@ void editorRedo(void);
 
 void die(const char *s)
 {
+  write(STDOUT_FILENO, RP_RESET, 4);
   write(STDOUT_FILENO, "\x1b[2J", 4);
   write(STDOUT_FILENO, "\x1b[H", 3);
 
@@ -435,25 +451,25 @@ void editorUpdateSyntax(erow *row)
     editorUpdateSyntax(&E.row[row->idx + 1]);
 }
 
-int editorSyntaxToColor(int hl)
+const char *editorSyntaxToColor(int hl)
 {
   switch (hl)
   {
   case HL_COMMENT:
   case HL_MLCOMMENT:
-    return 36;
+    return RP_MUTED;
   case HL_KEYWORD1:
-    return 33;
+    return RP_KW1;
   case HL_KEYWORD2:
-    return 32;
+    return RP_KW2;
   case HL_STRING:
-    return 35;
+    return RP_STR;
   case HL_NUMBER:
-    return 31;
+    return RP_NUM;
   case HL_MATCH:
-    return 34;
+    return RP_MATCH;
   default:
-    return 37;
+    return RP_FG;
   }
 }
 
@@ -1005,9 +1021,13 @@ void editorScroll()
 
 void editorDrawRows(struct abuf *ab)
 {
+  const int base_bg_len = (int)(sizeof(RP_BG) - 1);
+  const int base_fg_len = (int)(sizeof(RP_FG) - 1);
   int y;
   for (y = 0; y < E.screenrows; y++)
   {
+    abAppend(ab, RP_BG, base_bg_len);
+    abAppend(ab, RP_FG, base_fg_len);
     int filerow = y + E.rowoff;
     if (filerow >= E.numrows)
     {
@@ -1042,42 +1062,48 @@ void editorDrawRows(struct abuf *ab)
         len = E.screencols;
       char *c = &E.row[filerow].render[E.coloff];
       unsigned char *hl = &E.row[filerow].hl[E.coloff];
-      int current_color = -1;
+      const char *current_color = NULL;
       int j;
       for (j = 0; j < len; j++)
       {
         if (hl[j] == HL_NORMAL)
         {
-          if (current_color != -1)
+          if (current_color)
           {
-            abAppend(ab, "\x1b[39m", 5);
-            current_color = -1;
+            abAppend(ab, RP_FG, base_fg_len);
+            current_color = NULL;
           }
           abAppend(ab, &c[j], 1);
         }
         else
         {
-          int color = editorSyntaxToColor(hl[j]);
+          const char *color = editorSyntaxToColor(hl[j]);
           if (color != current_color)
           {
             current_color = color;
-            char buf[16];
-            int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color);
-            abAppend(ab, buf, clen);
+            abAppend(ab, color, (int)strlen(color));
           }
           abAppend(ab, &c[j], 1);
         }
       }
-      abAppend(ab, "\x1b[39m", 5);
+      if (current_color)
+      {
+        abAppend(ab, RP_FG, base_fg_len);
+      }
     }
     abAppend(ab, "\x1b[K", 3);
+    abAppend(ab, RP_BG, base_bg_len);
+    abAppend(ab, RP_FG, base_fg_len);
     abAppend(ab, "\r\n", 2);
   }
 }
 
 void editorDrawStatusBar(struct abuf *ab)
 {
-  abAppend(ab, "\x1b[7m", 4);
+  const int overlay_bg_len = (int)(sizeof(RP_OVERLAY) - 1);
+  const int text_len = (int)(sizeof(RP_FG) - 1);
+  abAppend(ab, RP_OVERLAY, overlay_bg_len);
+  abAppend(ab, RP_FG, text_len);
   char status[80], rstatus[80];
   int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", E.filename ? E.filename : "[No Name]", E.numrows, E.dirty ? "(modified)" : "");
   int rlen = snprintf(rstatus, sizeof(rstatus), "%s | %d/%d", E.syntax ? E.syntax->filetype : "no ft", E.cy + 1, E.numrows);
@@ -1097,18 +1123,25 @@ void editorDrawStatusBar(struct abuf *ab)
       len++;
     }
   }
-  abAppend(ab, "\x1b[m", 3);
+  abAppend(ab, RP_BG, (int)(sizeof(RP_BG) - 1));
+  abAppend(ab, RP_FG, text_len);
   abAppend(ab, "\r\n", 2);
 }
 
 void editorDrawMessageBar(struct abuf *ab)
 {
+  const int message_bg_len = (int)(sizeof(RP_MSG) - 1);
+  const int text_len = (int)(sizeof(RP_FG) - 1);
+  abAppend(ab, RP_MSG, message_bg_len);
+  abAppend(ab, RP_FG, text_len);
   abAppend(ab, "\x1b[K", 3);
   int msglen = strlen(E.statusmsg);
   if (msglen > E.screencols)
     msglen = E.screencols;
   if (msglen && time(NULL) - E.statusmsg_time < 5)
     abAppend(ab, E.statusmsg, msglen);
+  abAppend(ab, RP_BG, (int)(sizeof(RP_BG) - 1));
+  abAppend(ab, RP_FG, text_len);
 }
 void editorRefreshScreen()
 {
@@ -1116,12 +1149,15 @@ void editorRefreshScreen()
   struct abuf ab = ABUF_INIT;
   abAppend(&ab, "\x1b[?25l", 6);
   abAppend(&ab, "\x1b[H", 3);
+  abAppend(&ab, RP_BG, (int)(sizeof(RP_BG) - 1));
+  abAppend(&ab, RP_FG, (int)(sizeof(RP_FG) - 1));
   editorDrawRows(&ab);
   editorDrawStatusBar(&ab);
   editorDrawMessageBar(&ab);
   char buf[32];
   snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff) + 1);
   abAppend(&ab, buf, strlen(buf));
+  abAppend(&ab, RP_FG, (int)(sizeof(RP_FG) - 1));
   abAppend(&ab, "\x1b[?25h", 6);
   write(STDOUT_FILENO, ab.b, ab.len);
   abFree(&ab);
@@ -1255,6 +1291,7 @@ void editorProcessKeypress()
       quit_times--;
       return;
     }
+    write(STDOUT_FILENO, RP_RESET, 4);
     write(STDOUT_FILENO, "\x1b[2J", 4);
     write(STDOUT_FILENO, "\x1b[H", 3);
     exit(0);

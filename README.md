@@ -16,3 +16,4 @@ Now, I'm gonna start making some changes to the code made with the guide and add
 
 ## My Features:
 - Added Undo and Redo Functionality
+- Changed the colors of the entire editor to match my hyprland theme (Rose Pine) cuz why not? I added colors to much more elements than provided in the guide too! (Do note that I did use ChatGPT to find ANSI values for each individual color in the palette)
