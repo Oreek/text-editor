@@ -14,5 +14,5 @@ Now, I'm gonna start making some changes to the code made with the guide and add
 
 ---
 
-##My Features:
+## My Features:
 - Added Undo and Redo Functionality
