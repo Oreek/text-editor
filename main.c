@@ -23,6 +23,7 @@
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define MEOWDITOR_VERSION "0.0.67"
 #define MEOW_QUIT_TIMES 2
+#define MEOW_UNDO_MAX 100
 
 enum editorKey
 {
@@ -98,6 +99,18 @@ struct editorConfig
 
 struct editorConfig E;
 
+typedef struct editorUndoStep {
+  char *buf;
+  int buflen;
+  int cx, cy;
+  int dirty;
+} editorUndoStep;
+
+editorUndoStep undoStack[MEOW_UNDO_MAX];
+editorUndoStep redoStack[MEOW_UNDO_MAX];
+int undoTop = 0;
+int redoTop = 0;
+
 /*** filetypes ***/
 
 char *C_HL_extensions[] = {".c", ".h", ".cpp", NULL};
@@ -122,6 +135,10 @@ struct editorSyntax HLDB[] = {
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
+char *editorRowsToString(int *buflen);
+void editorSaveSnapshot(void);
+void editorUndo(void);
+void editorRedo(void);
 
 /** Terminal ***/
 
@@ -604,6 +621,7 @@ void editorRowDelChar(erow *row, int at)
 
 void editorInsertChar(int c)
 {
+  editorSaveSnapshot();
   if (E.cy == E.numrows)
   {
     editorInsertRow(E.numrows, "", 0);
@@ -614,6 +632,7 @@ void editorInsertChar(int c)
 
 void editorInsertNewline()
 {
+  editorSaveSnapshot();
   if (E.cx == 0)
   {
     editorInsertRow(E.cy, "", 0);
@@ -638,6 +657,8 @@ void editorDelChar()
   if (E.cx == 0 && E.cy == 0)
     return;
 
+  editorSaveSnapshot();
+
   erow *row = &E.row[E.cy];
   if (E.cx > 0)
   {
@@ -653,7 +674,120 @@ void editorDelChar()
   }
 }
 
-/*** File Input & Output ***/
+static void editorClearDocument(void) {
+  for (int i = 0; i < E.numrows; i++) {
+    editorFreeRow(&E.row[i]);
+  }
+  free(E.row);
+  E.row = NULL;
+  E.numrows = 0;
+}
+
+static void editorLoadBuffer(const char *buf, int buflen) {
+  editorClearDocument();
+  int start = 0;
+  for (int i = 0; i < buflen; i++) {
+    if (buf[i] == '\n') {
+      int linelen = i - start;
+      editorInsertRow(E.numrows, (char *)buf + start, linelen);
+      start = i + 1;
+    }
+  }
+  if (buflen - start > 0) {
+    int linelen = buflen - start;
+    editorInsertRow(E.numrows, (char *)buf + start, linelen);
+  }
+}
+
+static void editorClearStack(editorUndoStep *stack, int *top) {
+  for (int i = 0; i < *top; i++) {
+    free(stack[i].buf);
+  }
+  *top = 0;
+}
+
+static void editorRestoreSnapshot(const editorUndoStep *snap) {
+  editorLoadBuffer(snap->buf, snap->buflen);
+  E.cx = snap->cx;
+  E.cy = snap->cy;
+  E.dirty = snap->dirty;
+  if (E.cy > E.numrows) E.cy = E.numrows;
+  erow *row = (E.cy < E.numrows) ? &E.row[E.cy] : NULL;
+  int rowlen = row ? row->size : 0;
+  if (E.cx > rowlen) E.cx = rowlen;
+}
+
+void editorSaveSnapshot(void) {
+  if (undoTop >= MEOW_UNDO_MAX) {
+    free(undoStack[0].buf);
+    memmove(&undoStack[0], &undoStack[1],
+            sizeof(editorUndoStep) * (MEOW_UNDO_MAX - 1));
+    undoTop--;
+  }
+  int buflen = 0;
+  char *buf = editorRowsToString(&buflen);
+  editorUndoStep *snap = &undoStack[undoTop++];
+  snap->buf = buf;
+  snap->buflen = buflen;
+  snap->cx = E.cx;
+  snap->cy = E.cy;
+  snap->dirty = E.dirty;
+  editorClearStack(redoStack, &redoTop);
+}
+
+void editorUndo(void) {
+  if (undoTop == 0) {
+    editorSetStatusMessage("Nothing to undo");
+    return;
+  }
+  if (redoTop >= MEOW_UNDO_MAX) {
+    free(redoStack[0].buf);
+    memmove(&redoStack[0], &redoStack[1],
+            sizeof(editorUndoStep) * (MEOW_UNDO_MAX - 1));
+    redoTop--;
+  }
+  int buflen = 0;
+  char *buf = editorRowsToString(&buflen);
+  editorUndoStep *redoSnap = &redoStack[redoTop++];
+  redoSnap->buf = buf;
+  redoSnap->buflen = buflen;
+  redoSnap->cx = E.cx;
+  redoSnap->cy = E.cy;
+  redoSnap->dirty = E.dirty;
+
+  editorUndoStep snap = undoStack[--undoTop];
+  editorRestoreSnapshot(&snap);
+  free(snap.buf);
+  editorSetStatusMessage("Undo");
+}
+
+void editorRedo(void) {
+  if (redoTop == 0) {
+    editorSetStatusMessage("Nothing to redo");
+    return;
+  }
+  if (undoTop >= MEOW_UNDO_MAX) {
+    free(undoStack[0].buf);
+    memmove(&undoStack[0], &undoStack[1],
+            sizeof(editorUndoStep) * (MEOW_UNDO_MAX - 1));
+    undoTop--;
+  }
+  int buflen = 0;
+  char *buf = editorRowsToString(&buflen);
+  editorUndoStep *undoSnap = &undoStack[undoTop++];
+  undoSnap->buf = buf;
+  undoSnap->buflen = buflen;
+  undoSnap->cx = E.cx;
+  undoSnap->cy = E.cy;
+  undoSnap->dirty = E.dirty;
+
+  editorUndoStep snap = redoStack[--redoTop];
+  editorRestoreSnapshot(&snap);
+  free(snap.buf);
+  editorSetStatusMessage("Redo");
+}
+
+/*** File Input and Output ***/
 
 char *editorRowsToString(int *buflen)
 {
@@ -697,6 +831,8 @@ void editorOpen(char *filename)
   free(line);
   fclose(fp);
   E.dirty = 0;
+  editorClearStack(undoStack, &undoTop);
+  editorClearStack(redoStack, &redoTop);
 }
 void editorSave()
 {
@@ -1126,6 +1262,12 @@ void editorProcessKeypress()
   case CTRL_KEY('s'):
     editorSave();
     break;
+  case CTRL_KEY('z'):
+    editorUndo();
+    break;
+  case CTRL_KEY('y'):
+    editorRedo();
+    break;
   case HOME_KEY:
     E.cx = 0;
     break;
@@ -1194,6 +1336,8 @@ void initEditor()
   E.statusmsg[0] = '\0';
   E.statusmsg_time = 0;
   E.syntax = NULL;
+  editorClearStack(undoStack, &undoTop);
+  editorClearStack(redoStack, &redoTop);
   if (getWindowSize(&E.screenrows, &E.screencols) == -1)
     die("getWindowSize");
   E.screenrows -= 2;
