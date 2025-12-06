@@ -105,6 +105,7 @@ struct editorConfig
   int numrows;
   erow *row;
   int dirty;
+  int show_help;
   char *filename;
   char statusmsg[80];
   time_t statusmsg_time;
@@ -114,7 +115,8 @@ struct editorConfig
 
 struct editorConfig E;
 
-typedef struct editorUndoStep {
+typedef struct editorUndoStep
+{
   char *buf;
   int buflen;
   int cx, cy;
@@ -145,8 +147,29 @@ struct editorSyntax HLDB[] = {
 
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
 
+struct editorHelpEntry {
+  const char *keys;
+  const char *desc;
+};
+
+const struct editorHelpEntry HELP_ENTRIES[] = {
+    {"Ctrl-S: ", "Save file"},
+    {"Ctrl-Q: ", "Quit editor"},
+    {"Ctrl-F: ", "Search"},
+    {"Ctrl-Z: ", "Undo"},
+    {"Ctrl-Y: ", "Redo"},
+    {"Ctrl-H: ", "Toggle this help"},
+    {"Arrow Keys: ", "Move cursor"},
+    {"Page Up/Down: ", "Scroll a page"},
+    {"Home/End: ", "Jump line start/end"},
+    {"ESC: ", "Cancel prompts / exit help"}
+};
+
+#define HELP_ENTRY_COUNT (sizeof(HELP_ENTRIES) / sizeof(HELP_ENTRIES[0]))
+
 /*** Prototypes ***/
 
+struct abuf;
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
@@ -154,6 +177,7 @@ char *editorRowsToString(int *buflen);
 void editorSaveSnapshot(void);
 void editorUndo(void);
 void editorRedo(void);
+void editorDrawHelp(struct abuf *ab);
 
 /** Terminal ***/
 
@@ -690,8 +714,10 @@ void editorDelChar()
   }
 }
 
-static void editorClearDocument(void) {
-  for (int i = 0; i < E.numrows; i++) {
+static void editorClearDocument(void)
+{
+  for (int i = 0; i < E.numrows; i++)
+  {
     editorFreeRow(&E.row[i]);
   }
   free(E.row);
@@ -699,42 +725,53 @@ static void editorClearDocument(void) {
   E.numrows = 0;
 }
 
-static void editorLoadBuffer(const char *buf, int buflen) {
+static void editorLoadBuffer(const char *buf, int buflen)
+{
   editorClearDocument();
   int start = 0;
-  for (int i = 0; i < buflen; i++) {
-    if (buf[i] == '\n') {
+  for (int i = 0; i < buflen; i++)
+  {
+    if (buf[i] == '\n')
+    {
       int linelen = i - start;
       editorInsertRow(E.numrows, (char *)buf + start, linelen);
       start = i + 1;
     }
   }
-  if (buflen - start > 0) {
+  if (buflen - start > 0)
+  {
     int linelen = buflen - start;
     editorInsertRow(E.numrows, (char *)buf + start, linelen);
   }
 }
 
-static void editorClearStack(editorUndoStep *stack, int *top) {
-  for (int i = 0; i < *top; i++) {
+static void editorClearStack(editorUndoStep *stack, int *top)
+{
+  for (int i = 0; i < *top; i++)
+  {
     free(stack[i].buf);
   }
   *top = 0;
 }
 
-static void editorRestoreSnapshot(const editorUndoStep *snap) {
+static void editorRestoreSnapshot(const editorUndoStep *snap)
+{
   editorLoadBuffer(snap->buf, snap->buflen);
   E.cx = snap->cx;
   E.cy = snap->cy;
   E.dirty = snap->dirty;
-  if (E.cy > E.numrows) E.cy = E.numrows;
+  if (E.cy > E.numrows)
+    E.cy = E.numrows;
   erow *row = (E.cy < E.numrows) ? &E.row[E.cy] : NULL;
   int rowlen = row ? row->size : 0;
-  if (E.cx > rowlen) E.cx = rowlen;
+  if (E.cx > rowlen)
+    E.cx = rowlen;
 }
 
-void editorSaveSnapshot(void) {
-  if (undoTop >= MEOW_UNDO_MAX) {
+void editorSaveSnapshot(void)
+{
+  if (undoTop >= MEOW_UNDO_MAX)
+  {
     free(undoStack[0].buf);
     memmove(&undoStack[0], &undoStack[1],
             sizeof(editorUndoStep) * (MEOW_UNDO_MAX - 1));
@@ -751,12 +788,15 @@ void editorSaveSnapshot(void) {
   editorClearStack(redoStack, &redoTop);
 }
 
-void editorUndo(void) {
-  if (undoTop == 0) {
+void editorUndo(void)
+{
+  if (undoTop == 0)
+  {
     editorSetStatusMessage("Nothing to undo");
     return;
   }
-  if (redoTop >= MEOW_UNDO_MAX) {
+  if (redoTop >= MEOW_UNDO_MAX)
+  {
     free(redoStack[0].buf);
     memmove(&redoStack[0], &redoStack[1],
             sizeof(editorUndoStep) * (MEOW_UNDO_MAX - 1));
@@ -777,12 +817,15 @@ void editorUndo(void) {
   editorSetStatusMessage("Undo");
 }
 
-void editorRedo(void) {
-  if (redoTop == 0) {
+void editorRedo(void)
+{
+  if (redoTop == 0)
+  {
     editorSetStatusMessage("Nothing to redo");
     return;
   }
-  if (undoTop >= MEOW_UNDO_MAX) {
+  if (undoTop >= MEOW_UNDO_MAX)
+  {
     free(undoStack[0].buf);
     memmove(&undoStack[0], &undoStack[1],
             sizeof(editorUndoStep) * (MEOW_UNDO_MAX - 1));
@@ -1019,6 +1062,64 @@ void editorScroll()
   }
 }
 
+void editorDrawHelp(struct abuf *ab)
+{
+  const int bg_len = (int)(sizeof(RP_BG) - 1);
+  const int fg_len = (int)(sizeof(RP_FG) - 1);
+  int total_lines = HELP_ENTRY_COUNT + 5;
+  if (total_lines > E.screenrows)
+    total_lines = E.screenrows;
+  int start_row = (E.screenrows - total_lines) / 2;
+  if (start_row < 0)
+    start_row = 0;
+
+  int entry_start = start_row + 2;
+  int footer_row = entry_start + HELP_ENTRY_COUNT + 1;
+
+  for (int y = 0; y < E.screenrows; y++)
+  {
+    abAppend(ab, RP_BG, bg_len);
+    abAppend(ab, RP_FG, fg_len);
+    abAppend(ab, "\x1b[K", 3);
+
+    const char *line = NULL;
+    char linebuf[128];
+    linebuf[0] = '\0';
+
+    if (y == start_row)
+    {
+      line = "Meowditor Help";
+    }
+    else if (y == start_row + 1)
+    {
+      line = "Keyboard shortcuts";
+    }
+    else if (y >= entry_start && y < entry_start + (int)HELP_ENTRY_COUNT)
+    {
+      const struct editorHelpEntry *item = &HELP_ENTRIES[y - entry_start];
+      snprintf(linebuf, sizeof(linebuf), "%-14s %s", item->keys, item->desc);
+      line = linebuf;
+    }
+    else if (y == footer_row)
+    {
+      line = "Press ESC or Ctrl-H to close";
+    }
+
+    if (line && E.screencols > 0)
+    {
+      int len = (int)strlen(line);
+      if (len > E.screencols)
+        len = E.screencols;
+      int padding = (E.screencols - len) / 2;
+      while (padding-- > 0)
+        abAppend(ab, " ", 1);
+      abAppend(ab, line, len);
+    }
+
+    abAppend(ab, "\r\n", 2);
+  }
+}
+
 void editorDrawRows(struct abuf *ab)
 {
   const int base_bg_len = (int)(sizeof(RP_BG) - 1);
@@ -1149,15 +1250,23 @@ void editorRefreshScreen()
   struct abuf ab = ABUF_INIT;
   abAppend(&ab, "\x1b[?25l", 6);
   abAppend(&ab, "\x1b[H", 3);
-  abAppend(&ab, RP_BG, (int)(sizeof(RP_BG) - 1));
-  abAppend(&ab, RP_FG, (int)(sizeof(RP_FG) - 1));
-  editorDrawRows(&ab);
-  editorDrawStatusBar(&ab);
-  editorDrawMessageBar(&ab);
-  char buf[32];
-  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff) + 1);
-  abAppend(&ab, buf, strlen(buf));
-  abAppend(&ab, RP_FG, (int)(sizeof(RP_FG) - 1));
+  if (E.show_help)
+  {
+    editorDrawHelp(&ab);
+    abAppend(&ab, "\x1b[H", 3);
+  }
+  else
+  {
+    abAppend(&ab, RP_BG, (int)(sizeof(RP_BG) - 1));
+    abAppend(&ab, RP_FG, (int)(sizeof(RP_FG) - 1));
+    editorDrawRows(&ab);
+    editorDrawStatusBar(&ab);
+    editorDrawMessageBar(&ab);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff) + 1);
+    abAppend(&ab, buf, strlen(buf));
+    abAppend(&ab, RP_FG, (int)(sizeof(RP_FG) - 1));
+  }
   abAppend(&ab, "\x1b[?25h", 6);
   write(STDOUT_FILENO, ab.b, ab.len);
   abFree(&ab);
@@ -1277,6 +1386,15 @@ void editorProcessKeypress()
 {
   static int quit_times = MEOW_QUIT_TIMES;
   int c = editorReadKey();
+  if (E.show_help)
+  {
+    if (c == CTRL_KEY('h') || c == '\x1b' || c == '\r')
+    {
+      E.show_help = 0;
+      editorSetStatusMessage("");
+    }
+    return;
+  }
   switch (c)
   {
   case '\r':
@@ -1316,7 +1434,6 @@ void editorProcessKeypress()
     editorFind();
     break;
   case BACKSPACE:
-  case CTRL_KEY('h'):
   case DEL_KEY:
     if (c == DEL_KEY)
       editorMoveCursor(ARROW_RIGHT);
@@ -1346,6 +1463,10 @@ void editorProcessKeypress()
   case ARROW_RIGHT:
     editorMoveCursor(c);
     break;
+  case CTRL_KEY('h'):
+    E.show_help = 1;
+    editorSetStatusMessage("HELP: Press ESC or Ctrl-H to close");
+    break;
   case CTRL_KEY('l'):
   case '\x1b':
     break;
@@ -1369,6 +1490,7 @@ void initEditor()
   E.numrows = 0;
   E.row = NULL;
   E.dirty = 0;
+  E.show_help = 0;
   E.filename = NULL;
   E.statusmsg[0] = '\0';
   E.statusmsg_time = 0;
@@ -1388,7 +1510,7 @@ int main(int argc, char *argv[])
   {
     editorOpen(argv[1]);
   }
-  editorSetStatusMessage("KITTY WANNA GO OUT?? Try Ctrl-Q");
+  editorSetStatusMessage("KITTY CONFUSED? Try Ctrl-H for help.");
   while (1)
   {
     editorRefreshScreen();
